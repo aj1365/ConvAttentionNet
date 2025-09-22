@@ -2,7 +2,7 @@
 
 [Mohammed Q. Alkhatib], [Ali Jamali](https://www.researchgate.net/profile/Ali-Jamali), and [Avik Bhattacharya](http://www.mrslab.in/Avik/)
 
-This Keras code is for the paper Alkhatib MQ, Jamali A and Bhattacharya A (2025) "[ConvAttentionNet: a high-performance model for efficient and accurate PolSAR data classification]([https://github.com/aj1365/PolSARFormer/blob/main/main.pdf]," in Front. Remote Sens, 6:1680450, doi: 10.3389/frsen.2025.1680450 [https://www.frontiersin.org/journals/remote-sensing/articles/10.3389/frsen.2025.1680450/full].
+This Keras code is for the paper Alkhatib MQ, Jamali A and Bhattacharya A (2025) "ConvAttentionNet: a high-performance model for efficient and accurate PolSAR data classification," in Front. Remote Sens, 6:1680450, doi: 10.3389/frsen.2025.1680450 [https://www.frontiersin.org/journals/remote-sensing/articles/10.3389/frsen.2025.1680450/full].
 
 Citation
 ---------------------
