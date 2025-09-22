@@ -4,50 +4,91 @@ Created on Mon Feb  7 09:21:37 2022
 
 @author: malkhatib
 """
-import scipy.io as sio
 import os
-from sklearn.decomposition import PCA
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix, accuracy_score, classification_report, cohen_kappa_score
 import numpy as np
+from sklearn.model_selection import train_test_split
+from tqdm import tqdm
+import spectral
+import matplotlib.pyplot as plt
+import scipy.io as sio
 from operator import truediv
-import random 
-from sklearn.utils import shuffle
+
+def get_img_indexes (class_map, removeZeroindexes = True):
+    """
+    Get indices of elements in the class map.
+    
+    Parameters:
+    class_map (numpy array): The class map (2D array).
+    removeZero (bool): If True, return indices of non-zero elements, 
+                       otherwise return indices of all elements.
+    
+    Returns:
+    tuple: (indices, labels)
+           - indices: List of tuples representing the indices of the selected elements.
+           - labels: Array of labels corresponding to the indices.
+    """
+    if removeZeroindexes:
+        # Get indices of non-zero values
+        indices = np.argwhere(class_map != 0)
+    else:
+        # Get indices of all elements (including zeros)
+        indices = np.argwhere(class_map != None)
+    
+    # Flatten the class map to get the corresponding pixel values (labels)
+    labels = class_map[indices[:, 0], indices[:, 1]]
+    
+    # Convert indices to a list of tuples for easier use
+    indices = [tuple(idx) for idx in indices]
+    
+    return indices, np.array(labels.tolist()) - 1
 
 
-
-
-def splitTrainTestSet(X, y, testRatio, randomState=345):
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=testRatio, random_state=randomState,
-                                                        stratify=y)
-    return X_train, X_test, y_train, y_test
-
-
-def padWithZeros(X, margin=2):
-    newX = np.zeros((X.shape[0] + 2 * margin, X.shape[1] + 2* margin, X.shape[2]),dtype=('complex64'))
+def createImageCubes(X, indices, windowSize):
+    """
+    Extract patches centered at given indices from the hyperspectral image 
+    after applying zero padding.
+    
+    Parameters:
+    X (numpy array): Hyperspectral image of shape (N, M, P)
+    indices (list of tuples): List of indices where patches should be extracted
+    windowSize (int): Window size, the patch will be of size (windowSize, windowSize)
+    
+    Returns:
+    list: List of image patches extracted from the padded hyperspectral image
+    """
+    # Calculate margin based on window size
+    margin = windowSize // 2
+    
+    # Apply zero padding to the hyperspectral image
+    N, M, P = X.shape
+    X_padded = np.zeros((N + 2 * margin, M + 2 * margin, P))
+    
+    # Offsets to place the original image in the center of the padded image
     x_offset = margin
     y_offset = margin
-    newX[x_offset:X.shape[0] + x_offset, y_offset:X.shape[1] + y_offset, :] = X
-    return newX
+    X_padded[x_offset:N + x_offset, y_offset:M + y_offset, :] = X
+    
+    # Extract patches centered at the provided indices
+    patches = []
+    
+    for idx in indices:
+        i, j = idx
+        i = i + margin
+        j = j + margin
+        # Get patch boundaries, ensuring the patch is centered at (i, j)
+        i_min = i - margin  # Centered on the index, accounting for padding
+        i_max = i_min + windowSize
+        j_min = j - margin
+        j_max = j_min + windowSize
+        
+        # Extract the patch
+        patch = X_padded[i_min:i_max, j_min:j_max, :]
+        
 
-def createImageCubes(X, y, windowSize=5, removeZeroLabels = True):
-    margin = int((windowSize - 1) / 2)
-    zeroPaddedX = padWithZeros(X, margin=margin)
-    # split patches
-    patchesData = np.zeros((X.shape[0] * X.shape[1], windowSize, windowSize, X.shape[2]), dtype=('complex64'))
-    patchesLabels = np.zeros((X.shape[0] * X.shape[1]))
-    patchIndex = 0
-    for r in range(margin, zeroPaddedX.shape[0] - margin):
-        for c in range(margin, zeroPaddedX.shape[1] - margin):
-            patch = zeroPaddedX[r - margin:r + margin + 1, c - margin:c + margin + 1]   
-            patchesData[patchIndex, :, :, :] = patch
-            patchesLabels[patchIndex] = y[r-margin, c-margin]
-            patchIndex = patchIndex + 1
-    if removeZeroLabels:
-        patchesData = patchesData[patchesLabels>0,:,:,:]
-        patchesLabels = patchesLabels[patchesLabels>0]
-        patchesLabels -= 1
-    return patchesData, patchesLabels
+        patches.append(patch)
+    
+    return np.array(patches)
+
 
 def AA_andEachClassAccuracy(confusion_matrix):
     list_diag = np.diag(confusion_matrix)
@@ -57,16 +98,7 @@ def AA_andEachClassAccuracy(confusion_matrix):
     return each_acc, average_acc
 
 
-def target(name):
-    if name == 'FL' or name == 'FL':
-        target_names = ['Unassigned', 'Water', 'Forest', 'Lucerne', 'Grass', 'Rapeseed',
-                        'Beet', 'Potatoes', 'Peas', 'Stem Beans', 'Bare Soil', 'Wheat', 'Wheat 2', 
-                        'Wheat 3', 'Barley', 'Buildings']
-    elif name == 'SF':
-        target_names = ['Unassigned', 'Bare Soil', 'Mountain', 'Water', 'Urban', 'Vegetation']
-        
-    return target_names 
-    
+
 def num_classes(dataset):
     if dataset == 'FL':
         output_units = 15
@@ -74,147 +106,37 @@ def num_classes(dataset):
         output_units = 5
     elif dataset == 'ober' or dataset == 'ober_real':
         output_units = 3
-    
     return output_units
 
+def loadData(name):
+    data_path = 'Datasets/PolSARData/'
+    if name == 'FL':
+        data = sio.loadmat(os.path.join(data_path, 'Flevoland_T3RF.mat'))['T3RF']
+        labels = sio.loadmat(os.path.join(data_path, 'FlevoLand_gt.mat'))['gt']
+        class_labels = ['Water', 'Forest', 'Lucerne', 'Grass', 'Rapeseed',
+                        'Beet', 'Potatoes', 'Peas', 'Stem Beans', 'Bare Soil', 'Wheat', 'Wheat 2', 
+                        'Wheat 3', 'Barley', 'Buildings']
 
-
-
-def Patch(data,height_index,width_index, PATCH_SIZE):
-    height_slice = slice(height_index, height_index+PATCH_SIZE)
-    width_slice = slice(width_index, width_index+PATCH_SIZE)
-    patch = data[height_slice, width_slice, :]
+    if name == 'SF':
+        data = sio.loadmat(os.path.join(data_path, 'SanFrancisco_T3RF.mat'))['T3RF']
+        labels = sio.loadmat(os.path.join(data_path, 'SanFrancisco_gt.mat'))['SanFrancisco_gt']
+        class_labels = ['Bare Soil', 'Mountain', 'Water', 'Urban', 'Vegetation']
     
-    return patch
-
-def getTrainTestSplit(X_cmplx, y, pxls_num):
-    if type(pxls_num) != list:
-        pxls_num = [pxls_num]*len(np.unique(y))
+    if name == 'ober':
+        data = sio.loadmat(os.path.join(data_path, 'Oberpfaffenhofen_T3RF.mat'))['T3RF']
+        labels = sio.loadmat(os.path.join(data_path, 'Oberpfaffenhofen_gt.mat'))['gt']
+        class_labels = ["Build-Up Areas", "Wood Land", "Open Areas"]
         
-    if len(np.unique(y)) != len(pxls_num):
-        print("length of pixels list doen't match the number of classes in the dataset")
-        return
-    else:
-        xTrain_cmplx = []
-        yTrain = []
-        
-        xTest_cmplx  = []
-        yTest  = []
-        for i in range(len(np.unique(y))):
-            if pxls_num[i] > len(y[y==i]):
-                print("Number of training pixles is larger than total class pixels")
-                return
-            else:
-                random.seed(321) #optional to reproduce the data
-                samples = random.sample(range(len(y[y==i])), pxls_num[i])
-                xTrain_cmplx.extend(X_cmplx[y==i][samples])
-                
-                yTrain.extend(y[y==i][samples])
-                
-                tmp1 = list(X_cmplx[y==i])
-               
-                tmp3 = list(y[y==i])
-                for ele in sorted(samples, reverse = True):
-                    del tmp1[ele]
-                    del tmp3[ele]
-
-                xTest_cmplx.extend(tmp1)
-                yTest.extend(tmp3)
-     
-  
-    xTrain_cmplx, yTrain = shuffle(xTrain_cmplx, yTrain, random_state=321)  
-    xTest_cmplx,  yTest = shuffle(xTest_cmplx, yTest, random_state=345)
-    
-    #xTrain_rgb, yTrain = shuffle(xTrain_rgb, yTrain, random_state=321)  
-    #xTest_rgb, yTest = shuffle(xTest_rgb, yTest, random_state=345)
-    
-    
-    
-    xTrain_cmplx = np.array(xTrain_cmplx)
-    yTrain = np.array(yTrain)
-    
-    xTest_cmplx = np.array(xTest_cmplx)
-    yTest = np.array(yTest)
-    
-      
-    return xTrain_cmplx, yTrain, xTest_cmplx, yTest
-        
-        
-    
-import cvnn.layers as complex_layers
-def cmplx_SE_Block(xin, se_ratio = 8):
-    # Squeeze Path
-    xin_gap =  GlobalCmplxAveragePooling2D(xin)
-    sqz = complex_layers.ComplexDense(xin.shape[-1]//se_ratio, activation='cart_relu')(xin_gap)
-    
-    # Excitation Path
-    excite1 = complex_layers.ComplexDense(xin.shape[-1], activation='cart_sigmoid')(sqz)
-    
-    out = tf.keras.layers.multiply([xin, excite1])
-    
-    return out
-    
-   
-
-import tensorflow as tf
-def GlobalCmplxAveragePooling2D(inputs):
-    inputs_r = tf.math.real(inputs)
-    inputs_i = tf.math.imag(inputs)
-    
-    output_r = tf.keras.layers.GlobalAveragePooling2D()(inputs_r)
-    output_i = tf.keras.layers.GlobalAveragePooling2D()(inputs_i)
-    
-    if inputs.dtype == 'complex' or inputs.dtype == 'complex64':
-           output = tf.complex(output_r, output_i)
-    else:
-           output = output_r
-    
-    return output
+    return data, labels, class_labels
 
 
 
+def splitTrainTestSet(X, y, testRatio, randomState=345):
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=testRatio, random_state=randomState,
+                                                        stratify=y)
+    return X_train, X_test, y_train, y_test
 
-def Standardize_data(X):
-    new_X = np.zeros(X.shape, dtype=(X.dtype))
-    _,_,c = X.shape
-    for i in range(c):
-        new_X[:,:,i] = (X[:,:,i] - np.mean(X[:,:,i])) / np.std(X[:,:,i])
-        
-    return new_X
-        
-        
-
-
-
-from numpy.fft import fft2, fftshift
-def getFFT(X):
-    X_fft = np.zeros(X.shape, dtype='complex64')
-    for ii in range(len(X)):
-        for jj in range(X.shape[3]):
-            X_fft[ii,:,:,jj] = fftshift(fft2(X[ii,:,:,jj])) 
-            #X_fft[ii,:,:,jj] = fftshift(fft2(X[ii,:,:,jj])) 
-            
-            
-    return X_fft
-
-
-import keras
-def cart_gelu(x):
-    x_r = tf.math.real(x)
-    x_i = tf.math.imag(x)
-    
-    gelu_r = keras.activations.gelu(x_r, approximate=False)
-    gelu_i = keras.activations.gelu(x_i, approximate=False)
-    
-    if x.dtype == 'complex' or x.dtype == 'complex64':
-           output = tf.complex(gelu_r, gelu_i)
-    else:
-           output = gelu_r
-    
-    return output
-
-
-def predict_by_batching(model, input_tensor, batch_size):
+def predict_by_batching(model, input_tensor_idx, batch_size, X, windowSize):
     '''
     Function to to perform predictions by dividing large tensor into small ones 
     to reduce load on GPU
@@ -230,32 +152,62 @@ def predict_by_batching(model, input_tensor, batch_size):
     Predicetd labels
     '''
     
-    num_samples = input_tensor.shape[0]
+    num_samples = len(input_tensor_idx)
     k = 0
     predictions = []
-    for i in range(0, num_samples, batch_size):
-        print("batch", k, " out of", num_samples//batch_size)
-        print(k*batch_size, "out of", num_samples )
+    for i in tqdm(range(0, num_samples, batch_size), desc="Progress"):
         k+=1
-        batch = input_tensor[i:i + batch_size]
-        batch_predictions = model.predict(batch, verbose=1)
+        
+        batch = createImageCubes(X, input_tensor_idx[i:i + batch_size], windowSize)
+        batch_predictions = model.predict(batch, verbose=0)
         predictions.append(batch_predictions)
         
     Y_pred_test = np.concatenate(predictions, axis=0)
   
     return Y_pred_test
 
+def get_class_map(model, X, label, window_size):
+    indexes, labels = get_img_indexes(label, removeZeroindexes = False)
+    
+    y_pred = predict_by_batching(model, indexes, 10000, X, window_size)
+    
+    y_pred = (np.argmax(y_pred, axis=1)).astype(np.uint8)
+    
+    Y_pred = np.reshape(y_pred, label.shape) + 1
+
+
+    gt_binary = label
+
+    gt_binary[gt_binary>0]=1
+    
+   
+    return Y_pred
 
 
 
 
-
-
-
-
-
-
-
+def img_display(data = None, rgb_band = None, classes = None,class_name = None,title = None, 
+                figsize = (7,7),palette = spectral.spy_colors):
+    if data is not None:
+        im_rgb = np.zeros_like(data[:,:,0:3])
+        im_rgb = data[:,:,rgb_band]
+        im_rgb = im_rgb/(np.max(np.max(im_rgb,axis = 1),axis = 0))*255
+        im_rgb = np.asarray(im_rgb,np.uint8)
+        fig, rgbax = plt.subplots(figsize = figsize)
+        rgbax.imshow(im_rgb)
+        rgbax.set_title(title)
+        rgbax.axis('off')
+        
+    elif classes is not None:
+        rgb_class = np.zeros((classes.shape[0],classes.shape[1],3))
+        for i in np.unique(classes):
+            rgb_class[classes==i]=palette[i]
+        rgb_class = np.asarray(rgb_class, np.uint8)
+        _,classax = plt.subplots(figsize = figsize)
+        classax.imshow(rgb_class)
+        classax.set_title(title)
+        classax.axis('off')
+        
 
 
 
