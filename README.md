@@ -9,9 +9,9 @@ Citation
 
 **Please kindly cite the papers if this code is useful and helpful for your research.**
 
-    @article{jamali2023local,
+    @article{Alkhatib2025,
         title={ConvAttentionNet: a high-performance model for efficient and accurate PolSAR data classification},
-        author={lkhatib MQ, Jamali A and Bhattacharya A },
+        author={Alkhatib MQ, Jamali A and Bhattacharya A },
         journal={Front. Remote Sens},
         volume={6},
         pages={1680450},
